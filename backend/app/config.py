@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     request_timeout_seconds: int = 20
     max_retries: int = 3
     worker_concurrency: int = 4
+    sitemap_candidate_limit: int = 50
     allow_local_demo_targets: bool = True
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

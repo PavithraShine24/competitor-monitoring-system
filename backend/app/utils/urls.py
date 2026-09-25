@@ -7,8 +7,11 @@ TRACKING_KEYS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_co
 
 def normalize_url(value: str) -> str:
     parts = urlsplit(value.strip())
-    scheme = "https" if parts.scheme.lower() in {"http", "https"} else parts.scheme.lower()
     hostname = (parts.hostname or "").lower()
+    local_demo = settings.allow_local_demo_targets and hostname in {"localhost", "127.0.0.1"}
+    scheme = parts.scheme.lower()
+    if scheme in {"http", "https"}:
+        scheme = "http" if local_demo else "https"
     port = parts.port
     netloc = hostname
     if port and not ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
@@ -16,6 +19,14 @@ def normalize_url(value: str) -> str:
     query = urlencode([(key, val) for key, val in parse_qsl(parts.query, keep_blank_values=True) if key.lower() not in TRACKING_KEYS])
     path = parts.path.rstrip("/") or "/"
     return urlunsplit((scheme, netloc, path, query, ""))
+
+def normalized_url_aliases(value: str) -> set[str]:
+    normalized = normalize_url(value)
+    aliases = {normalized}
+    parts = urlsplit(normalized)
+    if settings.allow_local_demo_targets and parts.hostname in {"localhost", "127.0.0.1"}:
+        aliases.add(urlunsplit(("https", parts.netloc, parts.path, parts.query, "")))
+    return aliases
 
 def validate_public_url(value: str) -> str:
     parts = urlsplit(value)

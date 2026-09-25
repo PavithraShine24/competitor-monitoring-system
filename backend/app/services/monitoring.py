@@ -1,14 +1,38 @@
 from datetime import datetime, timezone
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from .extraction import extract_article
 from .strategies import Candidate, DirectPageDetector, RSSDetector, SitemapDetector
 from ..models import Article, ArticleImage, DetectionEvent, MonitoringCheck, Notification
 from ..utils.time import detection_delay_seconds, utc_now
-from ..utils.urls import normalize_url
+from ..utils.urls import normalize_url, normalized_url_aliases
 
 DETECTORS = {"rss": RSSDetector, "sitemap": SitemapDetector, "direct": DirectPageDetector}
+
+def _normalize_comparison_text(value: str | None) -> str:
+    return " ".join((value or "").split())
+
+def _article_changes(existing: Article, extracted: dict) -> tuple[dict, list[str]]:
+    updates = {}
+    changed_fields = []
+    text_fields = ("title", "content", "author", "meta_description")
+    for field in text_fields:
+        current = extracted.get(field)
+        if field == "content" and not _normalize_comparison_text(current):
+            continue
+        if field != "content" and current is None:
+            continue
+        previous = getattr(existing, field)
+        if _normalize_comparison_text(previous) != _normalize_comparison_text(current):
+            updates[field] = current
+            changed_fields.append(field)
+    for field in ("published_at", "modified_at"):
+        current = extracted.get(field)
+        if current is not None and current != getattr(existing, field):
+            updates[field] = current
+            changed_fields.append(field)
+    return updates, changed_fields
 
 async def run_check(session: AsyncSession, competitor, config, retry_count: int = 0) -> MonitoringCheck:
     started = utc_now()
@@ -26,8 +50,34 @@ async def run_check(session: AsyncSession, competitor, config, retry_count: int 
         check.articles_found = len(candidates)
         for candidate in candidates:
             normalized = normalize_url(candidate.url)
-            existing = await session.scalar(select(Article).where(Article.competitor_id == competitor.id, Article.normalized_url == normalized))
+            existing = await session.scalar(select(Article).where(Article.competitor_id == competitor.id, Article.normalized_url.in_(normalized_url_aliases(candidate.url))))
             if existing:
+                try:
+                    async with __import__("httpx").AsyncClient(timeout=20, follow_redirects=True, headers={"User-Agent": "Signalwatch/0.1"}) as client:
+                        page = await client.get(candidate.url)
+                        page.raise_for_status()
+                    extracted = extract_article(page.text, candidate.url)
+                except Exception:
+                    continue
+                updates, changed_fields = _article_changes(existing, extracted)
+                if not changed_fields:
+                    continue
+                previous_title = existing.title
+                existing.url = candidate.url
+                existing.normalized_url = normalized
+                for field, value in updates.items():
+                    setattr(existing, field, value)
+                if extracted.get("canonical_url"):
+                    existing.canonical_url = extracted["canonical_url"]
+                if extracted.get("structured_metadata"):
+                    existing.structured_metadata = extracted["structured_metadata"]
+                existing.extraction_status = extracted.get("extraction_status", existing.extraction_status)
+                detected_at = utc_now()
+                evidence = {"event_type": "article_updated", "changed_fields": changed_fields, "content_changed": "content" in changed_fields}
+                if "title" in changed_fields:
+                    evidence.update({"previous_title": previous_title, "new_title": existing.title})
+                session.add(DetectionEvent(article_id=existing.id, competitor_id=competitor.id, monitoring_check_id=check.id, detection_method=strategy, detected_at=detected_at, published_at=existing.published_at, detection_delay_seconds=None, event_status="updated", evidence=evidence))
+                session.add(Notification(article_id=existing.id, type="in_app", status="created"))
                 continue
             detected_at = utc_now()
             article = Article(competitor_id=competitor.id, title=candidate.title, url=candidate.url, normalized_url=normalized, source_url=source, published_at=candidate.published_at, detected_at=detected_at, detection_delay_seconds=detection_delay_seconds(candidate.published_at, detected_at), detection_method=strategy, extraction_status="pending")

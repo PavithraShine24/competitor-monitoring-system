@@ -1,5 +1,5 @@
-import { FormEvent, useState } from 'react';
 import { ArrowRight, LockKeyhole, Mail, Radar } from 'lucide-react';
+import { FormEvent, useState } from 'react';
 import { api } from './api';
 import './login.css';
 
