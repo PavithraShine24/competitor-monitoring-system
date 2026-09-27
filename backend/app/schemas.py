@@ -8,6 +8,7 @@ class CompetitorCreate(BaseModel):
     feed_url: HttpUrl | None = None
     sitemap_url: HttpUrl | None = None
     enabled: bool = False
+    strategy: str = Field(default="auto", pattern="^(auto|rss|sitemap|direct)$")
 
 class CompetitorUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)

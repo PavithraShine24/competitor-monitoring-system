@@ -20,7 +20,7 @@ async def create_competitor(payload: CompetitorCreate, db: AsyncSession = Depend
     competitor = Competitor(name=payload.name, website_url=website_url, blog_url=str(payload.blog_url) if payload.blog_url else None, feed_url=str(payload.feed_url) if payload.feed_url else None, sitemap_url=str(payload.sitemap_url) if payload.sitemap_url else None, enabled=payload.enabled, status="pending")
     db.add(competitor)
     await db.flush()
-    db.add(MonitoringConfig(competitor_id=competitor.id, enabled=payload.enabled))
+    db.add(MonitoringConfig(competitor_id=competitor.id, strategy=payload.strategy, enabled=payload.enabled))
     await db.commit()
     await db.refresh(competitor)
     return competitor
